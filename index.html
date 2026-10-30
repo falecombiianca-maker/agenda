@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Marcar reunião</title>
+<style>
+  :root{--tinta:#1d2a3a;--suave:#617081;--borda:#dde3ea;--marca:#1f3b5c;--ok:#0b7a3e;--okfundo:#e7f5ec;--erro:#b4231b;--errofundo:#fbeaea;--info:#f2f5f8}
+  *{box-sizing:border-box}
+  body{font:13px/1.45 system-ui,"Segoe UI",Arial,sans-serif;margin:0;padding:12px;color:var(--tinta);background:#fff}
+  h1{font-size:14px;margin:0 0 10px}
+  h2{font-size:12px;margin:14px 0 4px;text-transform:uppercase;letter-spacing:.04em;color:var(--suave)}
+  label{display:block;font-size:11px;color:var(--suave);margin:8px 0 3px}
+  input,select,textarea{width:100%;font:inherit;padding:6px 8px;border:1px solid var(--borda);border-radius:6px;background:#fff;color:var(--tinta)}
+  textarea{resize:vertical;min-height:52px}
+  input:focus,select:focus,textarea:focus{outline:2px solid #c3d3e6;border-color:var(--marca)}
+  .linha{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .equipe{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:2px}
+  .equipe label{display:flex;align-items:center;gap:5px;margin:0;font-size:12px;color:var(--tinta)}
+  .equipe input{width:auto}
+  button{font:inherit;font-weight:600;width:100%;padding:8px 10px;border:1px solid var(--marca);background:var(--marca);color:#fff;border-radius:6px;cursor:pointer;margin-top:10px}
+  button.sec{background:#fff;color:var(--marca)}
+  button.mini{width:auto;margin:6px 0 0;padding:4px 10px;font-size:12px}
+  button:disabled{opacity:.55;cursor:default}
+  .msg{margin-top:8px;padding:8px 9px;border-radius:6px;font-size:12px;white-space:pre-line}
+  .msg.ok{background:var(--okfundo);color:var(--ok)} .msg.erro{background:var(--errofundo);color:var(--erro)} .msg.info{background:var(--info);color:var(--suave)}
+  .confere b{display:block;font-size:13px;color:var(--tinta);margin:2px 0}
+  .cartao{border:1px solid var(--borda);border-radius:8px;padding:8px 9px;margin-top:8px}
+  .cartao .tit{font-weight:600;font-size:12px}
+  .cartao .quando{font-size:11px;color:var(--suave)}
+  .cartao pre{white-space:pre-wrap;font:12px/1.4 inherit;margin:6px 0 0;color:var(--tinta);max-height:84px;overflow:auto}
+  .cartao.passou{opacity:.55}
+  a{color:var(--marca);word-break:break-all}
+  small{color:var(--suave);display:block;margin-top:8px}
+  .hid{display:none}
+</style>
+</head>
+<body>
+<h1>Marcar reunião</h1>
+<div id="estado" class="msg info">Abrindo…</div>
+
+<form id="f" class="hid" autocomplete="off">
+  <label for="nome">Nome do lead</label>
+  <input id="nome" required>
+  <div class="linha">
+    <div><label for="tel">Telefone</label><input id="tel" inputmode="tel"></div>
+    <div><label for="email">E-mail (opcional)</label><input id="email" type="email" placeholder="recebe o convite"></div>
+  </div>
+  <div class="linha">
+    <div><label for="dia">Dia</label><select id="dia"><option>carregando…</option></select></div>
+    <div><label for="hora">Horário</label><select id="hora"></select></div>
+  </div>
+  <label for="duracao">Duração</label>
+  <select id="duracao"></select>
+  <label for="resumo">Resumo do caso (vai na descrição do evento)</label>
+  <textarea id="resumo" placeholder="ex.: Valor da dívida R$500k, em atraso, sem garantia. CNPJ"></textarea>
+  <label>Convidar da equipe</label>
+  <div id="equipe" class="equipe"></div>
+  <div id="confere" class="msg info confere hid"></div>
+  <button id="btn" type="submit">Conferir</button>
+  <button id="voltar" class="sec hid" type="button">Voltar e mudar</button>
+  <small>Só aparecem horários livres na agenda da Dra. Bianca. O evento é criado com Google Meet e convite para quem estiver marcado.</small>
+</form>
+
+<div id="resultado" class="hid">
+  <div id="okmsg" class="msg ok"></div>
+  <div class="cartao"><span class="tit">Google Meet</span><br><a id="meet" target="_blank" rel="noopener"></a></div>
+  <h2>Mensagens para o lead</h2>
+  <div id="mensagens"></div>
+  <small>Envie a confirmação agora. As outras duas, programe pelo menu "Agendar mensagem" da conversa, nos horários indicados.</small>
+  <button id="outra" class="sec" type="button">Marcar outra</button>
+</div>
+
+<script>
+  // >>> Cole aqui a URL /exec da implantação do Apps Script (Codigo.gs)
+  var BRACO = 'COLE_AQUI_A_URL_DO_APPS_SCRIPT';
+
+  var q = new URLSearchParams(location.search);
+  var ctx = { token: q.get('token') || '', operator_id: q.get('operator_id') || '', auth_secret: q.get('auth_secret') || '',
+              chave: q.get('chave') || '', contactId: '', conversationId: '', operatorName: '' };
+  var cache = {}, conferido = false, recebeuConversa = false;
+  var $ = function (id) { return document.getElementById(id); };
+
+  function estado(txt, cls) { var e = $('estado'); e.textContent = txt; e.className = 'msg ' + (cls || 'info'); e.classList.remove('hid'); }
+  function toast(msg, tipo) { try { window.parent.postMessage({ event: 'toast', data: { type: tipo || 'success', message: msg } }, '*'); } catch (_) {} }
+  function chamar(dados) {
+    dados.token = ctx.token; dados.operator_id = ctx.operator_id; dados.auth_secret = ctx.auth_secret; dados.chave = ctx.chave;
+    return fetch(BRACO, { method: 'POST', body: JSON.stringify(dados) }).then(function (r) { return r.json(); });
+  }
+  function hhmm(iso) { return new Date(Date.parse(iso) - 3 * 3600000).toISOString().slice(11, 16); }
+  function dataBR(iso) { return new Date(Date.parse(iso) - 3 * 3600000).toISOString().slice(0, 10); }
+  function extenso(data) {
+    try { return new Date(data + 'T12:00:00-03:00').toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'America/Sao_Paulo' }); }
+    catch (_) { return data.split('-').reverse().join('/'); }
+  }
+  function relativo(data) {
+    var hoje = dataBR(new Date().toISOString()), amanha = dataBR(new Date(Date.now() + 86400000).toISOString());
+    return data === hoje ? 'HOJE' : (data === amanha ? 'AMANHÃ' : '');
+  }
+
+  // ---- KinBox → plugin: dados da conversa aberta
+  window.addEventListener('message', function (ev) {
+    var d = ev.data || {}; if (!d.event) return;
+    if (d.event === 'conversation') {
+      recebeuConversa = true;
+      var c = (d.data && d.data.contact) || {}, conv = (d.data && d.data.conversation) || {}, u = (d.data && d.data.user) || {};
+      if (String(conv.id || '') !== String(ctx.conversationId || '')) zerar();
+      ctx.contactId = c.id || ''; ctx.conversationId = conv.id || ''; ctx.operatorName = u.name || '';
+      if (!$('nome').value) $('nome').value = c.name || '';
+      if (!$('tel').value) $('tel').value = c.phone || '';
+      if (!$('email').value && c.email && /@/.test(c.email)) $('email').value = c.email;
+      mostrarForm();
+    }
+    if (d.event === 'no_conversation') estado('Abra uma conversa para marcar a reunião.', 'info');
+  });
+
+  function mostrarForm() { $('f').classList.remove('hid'); $('estado').classList.add('hid'); }
+  function zerar() {
+    ['nome', 'tel', 'email', 'resumo'].forEach(function (id) { $(id).value = ''; });
+    $('resultado').classList.add('hid'); $('f').classList.remove('hid'); desconferir();
+  }
+
+  // ---- configuração e horários
+  function iniciar() {
+    if (BRACO.indexOf('http') !== 0) { estado('Falta colar a URL do Apps Script no index.html (linha BRACO).', 'erro'); return; }
+    if (!ctx.auth_secret && !ctx.chave) { estado('Esta tela só funciona como plugin do KinBox (falta a chave na URL do plugin).', 'erro'); return; }
+    chamar({ action: 'config' }).then(function (r) {
+      if (!r.ok) { estado(r.error, 'erro'); return; }
+      $('duracao').innerHTML = r.duracoes.map(function (m) { return '<option value="' + m + '">' + m + ' min</option>'; }).join('');
+      $('equipe').innerHTML = '';
+      r.equipe.forEach(function (m) {
+        var l = document.createElement('label'), cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.value = m.id; cb.checked = !!m.padrao; cb.addEventListener('change', desconferir);
+        l.appendChild(cb); l.appendChild(document.createTextNode(m.nome)); $('equipe').appendChild(l);
+      });
+      carregarHorarios();
+      // fora do KinBox (teste com ?chave=...), libera o formulário para preencher à mão
+      setTimeout(function () { if (!recebeuConversa) { mostrarForm(); estado('Sem conversa do KinBox: preencha os dados à mão.', 'info'); } }, 2500);
+    }).catch(function (e) { estado('Sem resposta do Apps Script: ' + e, 'erro'); });
+  }
+
+  function carregarHorarios() {
+    var dur = $('duracao').value, diaAtual = $('dia').value;
+    $('dia').innerHTML = '<option>carregando…</option>'; $('hora').innerHTML = '';
+    chamar({ action: 'slots', duracao: dur }).then(function (r) {
+      if (!r.ok) { estado(r.error, 'erro'); return; }
+      cache = r.porDia;
+      $('dia').innerHTML = r.days.map(function (d) {
+        var rel = relativo(d.date);
+        return '<option value="' + d.date + '"' + (d.livres ? '' : ' disabled') + '>' + (rel ? rel + ' · ' : '') + d.label + (d.livres ? '' : ' (cheio)') + '</option>';
+      }).join('');
+      var primeiro = r.days.filter(function (d) { return d.livres; })[0];
+      if (diaAtual && cache[diaAtual] && cache[diaAtual].length) $('dia').value = diaAtual; else if (primeiro) $('dia').value = primeiro.date;
+      renderHoras();
+    }).catch(function (e) { estado('Erro ao ler a agenda: ' + e, 'erro'); });
+  }
+  function renderHoras() {
+    var s = cache[$('dia').value] || [];
+    $('hora').innerHTML = s.length ? s.map(function (x) { return '<option value="' + x.iso + '">' + x.label + '</option>'; }).join('')
+                                   : '<option value="">sem horário livre</option>';
+  }
+
+  function equipeMarcada() {
+    return Array.prototype.slice.call($('equipe').querySelectorAll('input:checked')).map(function (i) { return i.value; });
+  }
+  function desconferir() { conferido = false; $('confere').classList.add('hid'); $('voltar').classList.add('hid'); var b = $('btn'); b.disabled = false; b.textContent = 'Conferir'; }
+
+  ['nome', 'tel', 'email', 'hora', 'resumo'].forEach(function (id) { $(id).addEventListener('input', desconferir); $(id).addEventListener('change', desconferir); });
+  $('dia').addEventListener('change', function () { renderHoras(); desconferir(); });
+  $('duracao').addEventListener('change', function () { desconferir(); carregarHorarios(); });
+  $('voltar').addEventListener('click', desconferir);
+
+  $('f').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var slot = $('hora').value;
+    if (!slot) { estado('Escolha um horário livre.', 'erro'); return; }
+    var b = $('btn');
+    if (!conferido) {   // 1º toque: mostra tudo por extenso para conferir
+      var data = dataBR(slot), rel = relativo(data), nomes = Array.prototype.slice.call($('equipe').querySelectorAll('input:checked')).map(function (i) { return i.parentNode.textContent; });
+      var c = $('confere'); c.innerHTML = '';
+      var add = function (t, forte) { var el = document.createElement(forte ? 'b' : 'div'); el.textContent = t; c.appendChild(el); };
+      add('Confira antes de marcar:');
+      add('Reunião ' + $('nome').value.trim() + ' com a Dra. Bianca');
+      add(extenso(data) + (rel ? ' (' + rel + ')' : '') + ', às ' + hhmm(slot) + ' · ' + $('duracao').value + ' min', true);
+      add('Convites: ' + ([$('email').value.trim()].concat(nomes).filter(Boolean).join(', ') || 'ninguém além da agenda da Dra. Bianca'));
+      c.classList.remove('hid'); $('voltar').classList.remove('hid'); $('estado').classList.add('hid');
+      conferido = true; b.textContent = 'Confirmar e marcar'; return;
+    }
+    b.disabled = true; b.textContent = 'Marcando…';
+    chamar({ action: 'marcar', slotISO: slot, duracao: $('duracao').value, name: $('nome').value.trim(), phone: $('tel').value.trim(),
+             email: $('email').value.trim(), resumo: $('resumo').value.trim(), equipe: equipeMarcada(),
+             contactId: ctx.contactId, conversationId: ctx.conversationId, operatorName: ctx.operatorName })
+    .then(function (r) {
+      desconferir();
+      if (!r.ok) { estado(r.error, 'erro'); toast(r.error, 'error'); if (/ocupado/.test(r.error)) carregarHorarios(); return; }
+      mostrarResultado(r); toast('Reunião marcada: ' + r.label);
+    }).catch(function (e) { desconferir(); estado('Falha: ' + e, 'erro'); });
+  });
+
+  function mostrarResultado(r) {
+    $('f').classList.add('hid'); $('estado').classList.add('hid'); $('resultado').classList.remove('hid');
+    $('okmsg').textContent = 'Reunião marcada: ' + r.label + '.' + (r.convidados.length ? '\nConvite enviado para: ' + r.convidados.join(', ') + '.' : '');
+    $('meet').textContent = r.meetLink || 'Abrir o evento na agenda'; $('meet').href = r.meetLink || r.htmlLink;
+    var box = $('mensagens'); box.innerHTML = '';
+    r.mensagens.forEach(function (m) {
+      var div = document.createElement('div'); div.className = 'cartao' + (m.passou ? ' passou' : '');
+      var tit = document.createElement('div'); tit.className = 'tit'; tit.textContent = m.titulo; div.appendChild(tit);
+      if (m.quando) { var qd = document.createElement('div'); qd.className = 'quando'; qd.textContent = m.passou ? 'Horário já passou: não precisa programar' : 'Programar para ' + m.quandoLabel; div.appendChild(qd); }
+      var pre = document.createElement('pre'); pre.textContent = m.texto; div.appendChild(pre);
+      var btn = document.createElement('button'); btn.type = 'button'; btn.className = 'sec mini'; btn.textContent = 'Copiar';
+      btn.addEventListener('click', function () { copiar(m.texto, btn); }); div.appendChild(btn);
+      box.appendChild(div);
+    });
+    carregarHorarios();
+  }
+  function copiar(txt, btn) {
+    var ok = function () { btn.textContent = 'Copiado ✓'; toast('Copiado: cole na conversa'); setTimeout(function () { btn.textContent = 'Copiar'; }, 2000); };
+    if (navigator.clipboard) navigator.clipboard.writeText(txt).then(ok, function () { prompt('Copie a mensagem:', txt); });
+    else prompt('Copie a mensagem:', txt);
+  }
+  $('outra').addEventListener('click', function () { $('resultado').classList.add('hid'); $('f').classList.remove('hid'); $('resumo').value = ''; });
+
+  iniciar();
+</script>
+</body>
+</html>
