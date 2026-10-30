@@ -73,8 +73,7 @@
 
 <script>
   // >>> Cole aqui a URL /exec da implantação do Apps Script (Codigo.gs)
-  var BRACO = 'COLE_AQUI_A_URL_DO_APPS_SCRIPT';
-
+  var BRACO = 'https://script.google.com/macros/s/AKfycbwihn_wmNErvH9lZrfGWbPQWYrFG-kejmoQkJ9vPC3kzutu6hhyGgVkc1A-bpa5cGoJWw/exec';
   var q = new URLSearchParams(location.search);
   var ctx = { token: q.get('token') || '', operator_id: q.get('operator_id') || '', auth_secret: q.get('auth_secret') || '',
               chave: q.get('chave') || '', contactId: '', conversationId: '', operatorName: '' };
